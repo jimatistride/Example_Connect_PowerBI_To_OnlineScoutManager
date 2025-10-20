@@ -1,4 +1,21 @@
 let
+   
+    /*
+    ============================================================
+    OSM - Section Balances (Power BI Query)
+    ============================================================
+
+    Author: Jim Walker, Treasurer, WF17 Mid Severn Sea Scouts
+
+    Description:
+    Script to connect to OSM and pull back amount owed by section
+
+    Output:
+    A table including section_name and amount_owing
+
+    ============================================================
+    */
+    
     // ========= SETTINGS (edit these) =========
     BaseUrl      = "https://www.onlinescoutmanager.co.uk/",
     ClientId     = "<ClientId>",
