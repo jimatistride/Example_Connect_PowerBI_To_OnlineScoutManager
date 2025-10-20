@@ -13,6 +13,13 @@ let
     Output:
     A table including section_name and amount_owing
 
+    Usage: 
+    Drop this in to Power Query in a 'Blank Query' from GetData
+    Replace ClientId and ClientSecret with values from your own 'App'
+    You must create your own app in:
+       OSM > Settings > My Account Details > Developer Tools, My Applications
+    Choose Anonymous authentication in Power Query Connect step when asked.
+    
     ============================================================
     */
     
