@@ -1,0 +1,100 @@
+let
+    // ========= SETTINGS (edit these) =========
+    BaseUrl      = "https://www.onlinescoutmanager.co.uk/",
+    ClientId     = "<ClientId>",
+    ClientSecret = "<ClientSecret>",
+    Scope        = "section:finance:read",
+    
+    // ========= Get OAuth token (client credentials) =========
+    TokenUrl = BaseUrl & "oauth/token",
+    TokenBody =
+        "grant_type=client_credentials"
+        & "&client_id=" & Uri.EscapeDataString(ClientId)
+        & "&client_secret=" & Uri.EscapeDataString(ClientSecret)
+        & "&scope=" & Uri.EscapeDataString(Scope),
+
+    TokenResp = Json.Document(
+        Web.Contents(
+            TokenUrl,
+            [
+                Headers = [#"Content-Type"="application/x-www-form-urlencoded"],
+                Content = Text.ToBinary(TokenBody)
+            ]
+        )
+    ),
+    AccessToken = TokenResp[access_token],
+
+    // ========= Get all sections you can access =========
+    ResourceResp = Json.Document(
+        Web.Contents(
+            BaseUrl & "oauth/resource",
+            [ Headers = [ Authorization = "Bearer " & AccessToken, Accept = "application/json" ] ]
+        )
+    ),
+    DataRec = ResourceResp[data],
+    SectionsList = if DataRec <> null and Record.HasFields(DataRec, "sections") then DataRec[sections] else {},
+
+    SectionsTableRaw =
+        Table.FromList(SectionsList, Splitter.SplitByNothing(), {"rec"}),
+    SectionsExpanded =
+        let
+            cols =
+                {
+                    {"section_id",    each if Record.HasFields(_, "section_id") then _[section_id] else Record.FieldOrDefault(_, "id", null)},
+                    {"section_name",  each if Record.HasFields(_, "section_name") then _[section_name]
+                                         else if Record.HasFields(_, "name") then _[name]
+                                         else if Record.HasFields(_, "display_name") then _[display_name]
+                                         else if Record.HasFields(_, "title") then _[title] else null},
+                    {"section_type",  each if Record.HasFields(_, "section_type") then _[section_type] else Record.FieldOrDefault(_, "type", null)},
+                    {"group_name",    each if Record.HasFields(_, "group_name") then _[group_name]
+                                         else if Record.HasFields(_, "group") then _[group]
+                                         else if Record.HasFields(_, "district") then _[district]
+                                         else Record.FieldOrDefault(_, "org_name", null)}
+                },
+            toRec = Table.TransformColumns(SectionsTableRaw, {{"rec", each Record.FromList(List.Transform(cols, (c) => c{1}(_)), List.Transform(cols, each _{0}))}}),
+            flat  = Table.ExpandRecordColumn(toRec, "rec", List.Transform(cols, each _{0}), List.Transform(cols, each _{0}))
+        in
+            flat,
+    SectionsTyped =
+        Table.TransformColumnTypes(
+            SectionsExpanded,
+            {{"section_id", Int64.Type}, {"section_name", type text}, {"section_type", type text}, {"group_name", type text}},
+            "en-GB"
+        ),
+
+    // ========= Function to get total amount owing for ONE section =========
+    GetAmountForSection =
+        (sid as text) as nullable number =>
+            let
+                Resp =
+                    try
+                        Json.Document(
+                            Web.Contents(
+                                BaseUrl & "ext/finances/onlinepayments/",
+                                [
+                                    Query   = [ action = "getSchemes", sectionid = sid ],
+                                    Headers = [ Authorization = "Bearer " & AccessToken, Accept = "application/json" ]
+                                ]
+                            )
+                        )
+                    otherwise null,
+                Items      = if Resp <> null and Record.HasFields(Resp, "items") then Resp[items] else {},
+                AmountList = List.Transform(Items, each try Number.FromText(Text.Replace(Record.Field(_, "amount_overdue"), ",", "")) otherwise 0),
+                Total      = List.Sum(AmountList)
+            in
+                Total,
+
+    // ========= Add amount_owing per section =========
+    WithAmounts =
+        Table.AddColumn(
+            SectionsTyped,
+            "amount_owing",
+            each GetAmountForSection(Text.From([section_id])),
+            type number
+        ),
+
+    // (optional) filter out “waiting list” or other non-finance sections:
+    Result =
+        Table.SelectRows(WithAmounts, each [section_type] <> "waiting")
+in
+    Result
