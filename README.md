@@ -79,7 +79,7 @@ You can easily join these tables in Power BI to build dashboards for:
 
 ## 🏕️ Why I Built This
 
- As a BI Consultant in my preofesl life, I wanted to do something which comes easily to me to help other groups.
+ As a BI Consultant in my professional life, I wanted to do something which comes easily to me to help other groups.
 
 These scripts aim to make financial and membership reporting simpler, transparent, and reusable for any Group or District using OSM.
 
