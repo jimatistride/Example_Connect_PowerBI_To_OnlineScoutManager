@@ -6,6 +6,7 @@ let
     ============================================================
 
     Author: Jim Walker, Treasurer, WF17 Mid Severn Sea Scouts
+    Contact: treasurer@midsevernseascouts.org.uk            
 
     Description:
     Script to connect to OSM and pull back amount owed by section

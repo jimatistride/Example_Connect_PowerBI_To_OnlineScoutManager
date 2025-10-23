@@ -1,0 +1,134 @@
+let
+   
+    /*
+    ============================================================
+    OSM - Group Dashboard (sizes + outstanding payments)
+    ============================================================
+
+    Author: Jim Walker, Treasurer, WF17 Mid Severn Sea Scouts
+    Contact: treasurer@midsevernseascouts.org.uk            
+
+    Description:
+    Connects to OSM using OAuth2 (client credentials), discovers the
+    sections you can access, then calls the Group Dashboard endpoint
+    with sectionsAndTypes to return:
+      - section_size (from data.sizes)
+      - amount_owing (GBP, from data.outstandingpayments)
+
+    Output columns:
+      section_id | section_name | section_type | group_name | section_size | amount_owing
+
+    Usage:
+      - Paste into a Blank Query in Power BI
+      - Replace ClientId / ClientSecret with your OSM OAuth app creds
+      - When prompted for credentials choose "Anonymous" (Bearer is sent in headers)
+      - Privacy level: Organizational (or None)
+
+    ============================================================
+    */
+
+    // ========= SETTINGS (edit these) =========
+    BaseUrl      = "https://www.onlinescoutmanager.co.uk/",
+    ClientId     = "<ClientId>",
+    ClientSecret = "<ClientSecret>",
+    Scope        = "section:member:read section:finance:read",
+
+    // ========= Get OAuth token (client credentials) =========
+    TokenUrl  = BaseUrl & "oauth/token",
+    TokenBody = "grant_type=client_credentials"
+              & "&client_id=" & Uri.EscapeDataString(ClientId)
+              & "&client_secret=" & Uri.EscapeDataString(ClientSecret)
+              & "&scope=" & Uri.EscapeDataString(Scope),
+
+    TokenResp = Json.Document(
+                  Web.Contents(
+                    TokenUrl,
+                    [
+                      Headers = [#"Content-Type"="application/x-www-form-urlencoded"],
+                      Content = Text.ToBinary(TokenBody)
+                    ])),
+    AccessToken = TokenResp[access_token],
+
+    // ========= Get sections you can access (id, name, type, group) =========
+    ResourceResp = Json.Document(
+                     Web.Contents(
+                       BaseUrl & "oauth/resource",
+                       [ Headers = [ Authorization = "Bearer " & AccessToken, Accept = "application/json" ] ])),
+    DataRec      = ResourceResp[data],
+    SectionsList = if DataRec <> null and Record.HasFields(DataRec, "sections") then DataRec[sections] else {},
+
+    SectionsTable =
+      Table.FromRecords(
+        List.Transform(
+          SectionsList,
+          each [
+            section_id   = if Record.HasFields(_, "section_id") then _[section_id] else Record.FieldOrDefault(_, "id", null),
+            section_name = if      Record.HasFields(_, "section_name") then _[section_name]
+                           else if Record.HasFields(_, "name")         then _[name]
+                           else if Record.HasFields(_, "display_name") then _[display_name]
+                           else if Record.HasFields(_, "title")        then _[title] else null,
+            section_type = if Record.HasFields(_, "section_type") then _[section_type] else Record.FieldOrDefault(_, "type", null),
+            group_name   = if      Record.HasFields(_, "group_name") then _[group_name]
+                           else if Record.HasFields(_, "group")       then _[group]
+                           else if Record.HasFields(_, "district")    then _[district]
+                           else Record.FieldOrDefault(_, "org_name", null)
+          ]
+        )
+      ),
+
+    SectionsTyped =
+      Table.TransformColumnTypes(
+        SectionsTable,
+        {{"section_id", Int64.Type}, {"section_name", type text}, {"section_type", type text}, {"group_name", type text}},
+        "en-GB"),
+
+    // Optional: remove Waiting List (comment out next line to include it)
+    SectionsUsed = Table.SelectRows(SectionsTyped, each [section_type] <> "waiting"),
+
+    // ========= Build sectionsAndTypes JSON object expected by the API =========
+    // Format: {"4548":"cubs","4549":"scouts","34983":"beavers","68347":"earlyyears"}
+    SectionsPairs =
+      List.Transform(
+        Table.ToRecords(SectionsUsed),
+        each """" & Text.From([section_id]) & """:""" & Text.From([section_type]) & """"
+      ),
+    SectionsAndTypesJson = "{" & Text.Combine(SectionsPairs, ",") & "}",
+
+    // ========= Call getGroupDashboard (v2=1) =========
+    Dash = Json.Document(
+             Web.Contents(
+               BaseUrl & "ext/dashboard/",
+               [
+                 Query = [
+                   action = "getGroupDashboard",
+                   v2 = "1",
+                   sectionsAndTypes = SectionsAndTypesJson
+                 ],
+                 Headers = [ Authorization = "Bearer " & AccessToken, Accept = "application/json" ]
+               ])),
+
+    D = if Record.HasFields(Dash, "data") then Dash[data] else [],
+
+    // ---- sizes: {4548:"5", 4549:"8", ...} -> table (section_id, section_size)
+    SizesRec = if Record.HasFields(D, "sizes") then D[sizes] else [],
+    SizesTbl =
+      if Value.Is(SizesRec, type record)
+      then
+        let
+          t  = Record.ToTable(SizesRec),
+          n1 = Table.TransformColumns(t, {{"Name", each Number.FromText(_), Int64.Type}}),
+          n2 = Table.TransformColumns(n1, {{"Value", each Number.FromText(_), Int64.Type}}),
+          rn = Table.RenameColumns(n2, {{"Name","section_id"},{"Value","section_size"}})
+        in rn
+      else Table.FromRecords({[section_id=null, section_size=null]}),
+
+    // ========= Join sizes + payments back to section metadata =========
+    JoinSizes = Table.NestedJoin(
+        SectionsUsed, {"section_id"},
+        SizesTbl,     {"section_id"},
+        "sizes", JoinKind.LeftOuter
+    ),
+    Result = Table.ExpandTableColumn(JoinSizes, "sizes", {"section_size"}, {"section_size"})
+
+in
+    Result
