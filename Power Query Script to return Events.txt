@@ -1,0 +1,136 @@
+let
+    /*
+    ============================================================
+    OSM - Events (all sections)
+    ============================================================
+
+    Author: Jim Walker, Treasurer, WF17 Mid Severn Sea Scouts
+    Contact: treasurer@midsevernseascouts.org.uk
+
+    Description:
+    Connects to OSM using OAuth2 (client credentials), discovers the
+    sections you can access, then calls the Events "summary" endpoint
+    for each section to return a single table of events.
+
+    Endpoint called per section:
+      ext/events/summary/?action=get&sectionid={SECTION_ID}[&termid={TERM_ID}]
+
+    Output columns (core):
+      section_id | section_name | section_type | eventid | name | startdate_g
+      startdate | enddate | starttime | endtime | cost | location
+      yes | no | invited | reserved | approval_status
+
+    Usage:
+      - Paste into a Blank Query in Power BI
+      - Replace ClientId / ClientSecret with your OSM OAuth app creds
+      - When prompted for credentials choose "Anonymous" (Bearer is sent in headers)
+      - Privacy level: Organizational (or None)
+
+    ============================================================
+    */
+
+    // ========= SETTINGS (edit these) =========
+    BaseUrl      = "https://www.onlinescoutmanager.co.uk/",
+    ClientId     = "<ClientId>",
+    ClientSecret = "<ClientSecret>",
+    Scope        = "section:event:read section:member:read",   // event + section discovery
+    TermId       = null,                                       // e.g. "842766" or null to omit
+
+    // ========= OAuth token (client credentials) =========
+    TokenUrl  = BaseUrl & "oauth/token",
+    TokenBody =
+        "grant_type=client_credentials"
+        & "&client_id=" & Uri.EscapeDataString(ClientId)
+        & "&client_secret=" & Uri.EscapeDataString(ClientSecret)
+        & "&scope=" & Uri.EscapeDataString(Scope),
+
+    TokenResp = Json.Document(
+                  Web.Contents(
+                    TokenUrl,
+                    [
+                      Headers = [#"Content-Type"="application/x-www-form-urlencoded"],
+                      Content = Text.ToBinary(TokenBody)
+                    ])),
+    AccessToken = TokenResp[access_token],
+
+    // ========= Get sections you can access (id, name, type, group) =========
+    ResourceResp = Json.Document(
+                     Web.Contents(
+                       BaseUrl & "oauth/resource",
+                       [ Headers = [ Authorization = "Bearer " & AccessToken, Accept = "application/json" ] ])),
+    DataRec      = if Record.HasFields(ResourceResp, "data") then ResourceResp[data] else [],
+    SectionsList = if Value.Is(DataRec, type record) and Record.HasFields(DataRec, "sections")
+                   then DataRec[sections] else {},
+
+    SectionsTable =
+      Table.FromRecords(
+        List.Transform(
+          SectionsList,
+          each [
+            section_id   = if Record.HasFields(_, "section_id") then _[section_id] else Record.FieldOrDefault(_, "id", null),
+            section_name = if      Record.HasFields(_, "section_name") then _[section_name]
+                           else if Record.HasFields(_, "name")         then _[name]
+                           else if Record.HasFields(_, "display_name") then _[display_name]
+                           else if Record.HasFields(_, "title")        then _[title] else null,
+            section_type = if Record.HasFields(_, "section_type") then _[section_type] else Record.FieldOrDefault(_, "type", null),
+            group_name   = if      Record.HasFields(_, "group_name") then _[group_name]
+                           else if Record.HasFields(_, "group")       then _[group]
+                           else if Record.HasFields(_, "district")    then _[district]
+                           else Record.FieldOrDefault(_, "org_name", null),
+            terms = if Record.HasFields(_,"terms") then _[terms] else null
+          ]
+        )
+      ),
+    #"Removed Columns1" = Table.RemoveColumns(SectionsTable,{"group_name"}),
+    #"Removed Columns" = Table.RemoveColumns(#"Removed Columns1",{"section_type"}),
+    #"Expanded terms" = Table.ExpandListColumn(#"Removed Columns", "terms"),
+    #"Expanded terms1" = Table.ExpandRecordColumn(#"Expanded terms", "terms", {"startdate", "term_id"}, {"terms.startdate", "terms.term_id"}),
+    SectionsWithLatestTerm = Table.Group(#"Expanded terms1", {"section_id", "section_name"}, {{"latestterm", each List.Max([terms.term_id]), type text}}),
+    // ==== Events per section (summary) with discovered term ====
+    GetEventsForSection = (sid as text, term as text) as table =>
+      let
+        term = term,
+        Resp = try Json.Document(
+                 Web.Contents(
+                   BaseUrl & "ext/events/summary/",
+                   [ Query=[action="get", sectionid=sid, termid=term],
+                     Headers=[Authorization="Bearer " & AccessToken, Accept="application/json"] ]))
+               otherwise null,
+        Items = if Resp<>null and Record.HasFields(Resp,"items") then Resp[items] else {},
+        Rows  = List.Transform(Items, (r)=>[
+                  section_id   = Number.FromText(sid),
+                  section_name = sname,
+                  section_type = stype,
+                  group_name   = gname,
+                  eventid      = try Number.FromText(Record.Field(r,"eventid")) otherwise null,
+                  event_name   = Record.FieldOrDefault(r,"name", null),
+                  startdate_g  = Record.FieldOrDefault(r,"startdate_g", null),
+                  startdate    = Record.FieldOrDefault(r,"startdate", null),
+                  enddate      = Record.FieldOrDefault(r,"enddate", null),
+                  starttime    = Record.FieldOrDefault(r,"starttime", null),
+                  endtime      = Record.FieldOrDefault(r,"endtime", null),
+                  cost         = try Number.FromText(Record.FieldOrDefault(r,"cost", null)) otherwise null,
+                  location     = Record.FieldOrDefault(r,"location", null),
+                  approval_status = Record.FieldOrDefault(r,"approval_status", null),
+                  yes          = try Number.FromText(Record.FieldOrDefault(r,"yes", null)) otherwise null,
+                  yes_members  = try Number.FromText(Record.FieldOrDefault(r,"yes_members", null)) otherwise null,
+                  yes_yls      = try Number.FromText(Record.FieldOrDefault(r,"yes_yls", null)) otherwise null,
+                  yes_leaders  = try Number.FromText(Record.FieldOrDefault(r,"yes_leaders", null)) otherwise null,
+                  reserved     = try Number.FromText(Record.FieldOrDefault(r,"reserved", null)) otherwise null,
+                  no           = try Number.FromText(Record.FieldOrDefault(r,"no", null)) otherwise null,
+                  invited      = try Number.FromText(Record.FieldOrDefault(r,"invited", null)) otherwise null,
+                  shown        = try Number.FromText(Record.FieldOrDefault(r,"shown", null)) otherwise null
+                ])
+      in
+        Table.FromRecords(Rows),
+
+    WithEvents =
+      Table.AddColumn(
+        SectionsWithLatestTerm, "events",
+        each GetEventsForSection(Text.From([section_id]),Text.From([latestterm])),
+        type table),
+    #"Removed Columns2" = Table.RemoveColumns(WithEvents,{"latestterm"}),
+    #"Expanded events" = Table.ExpandTableColumn(#"Removed Columns2", "events", {"event_name", "startdate", "cost"}, {"events.event_name", "events.startdate", "events.cost"}),
+    #"Changed Type" = Table.TransformColumnTypes(#"Expanded events",{{"events.cost", Int64.Type}})
+in
+    #"Changed Type"

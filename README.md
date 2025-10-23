@@ -32,6 +32,14 @@ Calls OSM's Group Dashboard endpoint to return section sizes and outstanding pay
 | section_id | section_name | section_type | group_name | section_size | amount_owing |
 |------------|--------------|--------------|------------|--------------|--------------|
 
+### 3. OSM_Events.pq
+
+Retrieves all events from all sections you have access to, automatically discovering the latest term for each section and returning event details including attendance figures.
+
+**Outputs:**
+| section_id | section_name | event_name | startdate | cost | yes | no | invited | reserved | location |
+|------------|--------------|------------|-----------|------|-----|----|---------|---------|-----------| 
+
 ## ⚙️ Setup Instructions
 
 ### Create an OAuth App in OSM
@@ -63,6 +71,26 @@ Calls OSM's Group Dashboard endpoint to return section sizes and outstanding pay
 
 - Power BI will now call OSM's API securely
 - You can refresh manually or schedule updates in Power BI Service
+
+## ⚠️ Important: API Rate Limits & Temporary Blocks
+
+**OSM may temporarily block your access if you send too many badly shaped requests or exceed rate limits.**
+
+**Common causes of temporary blocks:**
+- Refreshing queries too frequently (avoid refreshing more than once every few minutes)
+- Malformed API requests (double-check your Client ID and Client Secret)
+- Running multiple queries simultaneously
+
+**If you get blocked:**
+- OSM typically unlocks access automatically after a few hours
+- Check your OAuth credentials are correct
+- Reduce refresh frequency
+- Contact OSM support if the block persists beyond 24 hours
+
+**Best practices:**
+- Test queries individually before combining them
+- Allow reasonable intervals between refreshes (minimum 5-10 minutes)
+- Monitor your API usage in OSM's Developer Tools section
 
 ## 🧠 Notes
 
